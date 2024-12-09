@@ -1,0 +1,115 @@
+
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///library.db'
+app.config['JWT_SECRET_KEY'] = 'your_jwt_secret_key'
+db = SQLAlchemy(app)
+bcrypt = Bcrypt(app)
+jwt = JWTManager(app)
+auth = HTTPBasicAuth()
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    role = db.Column(db.String(10), nullable=False)
+
+class Book(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(120), nullable=False)
+    author = db.Column(db.String(120), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+
+class BorrowRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    book_id = db.Column(db.Integer, db.ForeignKey('book.id'), nullable=False)
+    start_date = db.Column(db.String(10), nullable=False)
+    end_date = db.Column(db.String(10), nullable=False)
+    status = db.Column(db.String(10), nullable=False, default='pending')
+
+class BorrowHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    book_id = db.Column(db.Integer, db.ForeignKey('book.id'), nullable=False)
+    start_date = db.Column(db.String(10), nullable=False)
+    end_date = db.Column(db.String(10), nullable=False)
+
+@app.route('/api/admin/users', methods=['POST'])
+@jwt_required()
+def create_user():
+    data = request.get_json()
+    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+    new_user = User(email=data['email'], password_hash=hashed_password, role='user')
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({"message": "User created successfully"}), 201
+
+@app.route('/api/admin/borrow-requests', methods=['GET'])
+@jwt_required()
+def get_borrow_requests():
+    borrow_requests = BorrowRequest.query.all()
+    result = [
+        {"id": req.id, "user_id": req.user_id, "book_id": req.book_id, "start_date": req.start_date, "end_date": req.end_date, "status": req.status}
+        for req in borrow_requests
+    ]
+    return jsonify(result)
+
+@app.route('/api/admin/borrow-requests/<int:req_id>', methods=['PATCH'])
+@jwt_required()
+def approve_or_deny_borrow_request(req_id):
+    data = request.get_json()
+    borrow_request = BorrowRequest.query.get_or_404(req_id)
+    borrow_request.status = data['status']
+    db.session.commit()
+    return jsonify({"message": "Request updated successfully"}), 200
+
+@app.route('/api/admin/users/<int:user_id>/borrow-history', methods=['GET'])
+@jwt_required()
+def get_user_borrow_history(user_id):
+    borrow_history = BorrowHistory.query.filter_by(user_id=user_id).all()
+    result = [
+        {"book_id": history.book_id, "start_date": history.start_date, "end_date": history.end_date}
+        for history in borrow_history
+    ]
+    return jsonify(result)
+
+@app.route('/api/books', methods=['GET'])
+def get_books():
+    books = Book.query.all()
+    result = [{"id": book.id, "title": book.title, "author": book.author, "quantity": book.quantity} for book in books]
+    return jsonify(result)
+
+@app.route('/api/users/borrow-requests', methods=['POST'])
+@jwt_required()
+def borrow_request():
+    data = request.get_json()
+    user_id = 1  # Replace with the current user ID from JWT
+    book = Book.query.get_or_404(data['book_id'])
+    existing_request = BorrowRequest.query.filter(
+        BorrowRequest.book_id == data['book_id'],
+        BorrowRequest.status == 'approved',
+        BorrowRequest.start_date <= data['end_date'],
+        BorrowRequest.end_date >= data['start_date']
+    ).first()
+
+    if existing_request:
+        return jsonify({"message": "Book is already borrowed for the selected dates"}), 400
+    
+    new_request = BorrowRequest(user_id=user_id, book_id=data['book_id'], start_date=data['start_date'], end_date=data['end_date'], status='pending')
+    db.session.add(new_request)
+    db.session.commit()
+    return jsonify({"message": "Request submitted successfully"}), 201
+
+@app.route('/api/users/<int:user_id>/borrow-history', methods=['GET'])
+@jwt_required()
+def get_user_borrow_history(user_id):
+    borrow_history = BorrowHistory.query.filter_by(user_id=user_id).all()
+    result = [
+        {"book_id": history.book_id, "start_date": history.start_date, "end_date": history.end_date}
+        for history in borrow_history
+    ]
+    return jsonify(result)
+
+if __name__ == '__main__':
+    app.run(debug=True)
